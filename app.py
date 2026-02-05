@@ -4,6 +4,49 @@ import re
 from datetime import date, timedelta, datetime
 import math
 
+import calendar # 記得在檔案最上方 import calendar
+
+def get_last_day_of_month(year, month):
+    """取得該年份月份的最後一天 (自動處理閏年 2/29)"""
+    last_day = calendar.monthrange(year, month)[1]
+    return date(year, month, last_day)
+
+def calculate_deadline_from_period(roc_year, month):
+    """
+    根據國民年金規則推算繳費期限：
+    規則：雙月計算、單月繳納。次月底為期限。
+    邏輯：
+    - 1、2月保費 (第1期) -> 4月底繳納
+    - 3、4月保費 (第2期) -> 6月底繳納
+    - ...
+    - 11、12月保費 (第6期) -> 次年2月底繳納
+    """
+    # 轉西元
+    year = roc_year + 1911
+    
+    # 判斷期數 (Batch): 1=Jan/Feb, 2=Mar/Apr, ..., 6=Nov/Dec
+    # 公式：(月份 - 1) // 2 + 1
+    # 但我們只需要知道「該期結束的月份」再加 2 個月就是期限
+    # 例如：1月保費 -> 歸屬 1-2月期 -> 2月 + 2個月 = 4月
+    
+    # 找出該期別的「偶數月」 (Coverage End Month)
+    # 如果是 1月，coverage_end = 2; 如果是 2月，coverage_end = 2
+    if month % 2 != 0:
+        coverage_end_month = month + 1
+    else:
+        coverage_end_month = month
+
+    # 期限月份 = 該期結束月 + 2
+    deadline_month = coverage_end_month + 2
+    deadline_year = year
+
+    # 處理跨年 (例如 11-12月保費，期限是 14月 -> 隔年 2月)
+    if deadline_month > 12:
+        deadline_month -= 12
+        deadline_year += 1
+        
+    return get_last_day_of_month(deadline_year, deadline_month)
+
 # --- 設定：歷年郵局一年期定存固定利率 (百分比) ---
 # 資料來源整理自勞保局與郵局歷史資料
 INTEREST_RATES = {
@@ -19,10 +62,6 @@ def get_rate(year):
     return INTEREST_RATES.get(year, INTEREST_RATES[max(INTEREST_RATES.keys())])
 
 def parse_pdf(file):
-    """
-    嘗試從 PDF 中提取「應繳金額」與「繳費期限」。
-    注意：不同版本的繳費單格式可能不同，這裡使用常見的關鍵字進行正則表達式搜尋。
-    """
     text = ""
     with pdfplumber.open(file) as pdf:
         for page in pdf.pages:
@@ -31,10 +70,11 @@ def parse_pdf(file):
     # 預設值
     amount = 0
     deadline = date.today()
+    extracted_period = None 
+    match_source = "無" # 用於除錯，告訴你是哪個規則抓到的
 
-    # 1. 嘗試抓取金額 (常見關鍵字：合計、應繳總金額)
-    # 尋找 "合計" 或 "金額" 後面的數字，允許包含千分位逗號
-    amt_match = re.search(r'(應繳總金額|合計|小計)\s*[:：]?\s*[\$NTD]*\s*([0-9,]+)', text)
+    # --- 1. 抓取金額 (維持不變) ---
+    amt_match = re.search(r'(應繳金額|合計|小計|總計)\s*[:：]?\s*[NTD$]*\s*([0-9,]+)', text)
     if amt_match:
         try:
             amount_str = amt_match.group(2).replace(',', '')
@@ -42,18 +82,39 @@ def parse_pdf(file):
         except:
             pass
 
-    # 2. 嘗試抓取日期 (常見格式：112/01/31 或 112.01.31 或 2023/01/31)
-    # 這裡針對民國年格式 (如 1120131 或 112/01/31) 進行粗略搜尋
-    date_match = re.search(r'繳費期限\s*[:：]?\s*(\d{2,3})[./]?(\d{2})[./]?(\d{2})', text)
-    if date_match:
-        try:
-            y, m, d = date_match.groups()
-            year = int(y) + 1911 # 轉西元
-            deadline = date(year, int(m), int(d))
-        except:
-            pass
+    # --- 2. 精準抓取保費年月 (新邏輯) ---
+    # 我們定義一個優先順序清單，越上面的規則越精準
+    
+    period_patterns = [
+        # 優先級 1 (最高)：使用者指定的格式 "112年10月未繳保費" 或 "112年10月 保費"
+        # 說明：抓取數字+年+數字+月，且後面緊接著 "未繳" 或 "保費"
+        (r'(\d{2,3})\s*[年/]\s*(\d{1,2})\s*[月]?\s*(?:未繳|保費)', "關鍵字：未繳/保費"),
 
-    return text, amount, deadline
+        # 優先級 2：標準欄位 "保險費年月：112年10月" 或 "保險費年月 112/10"
+        (r'保險費年月\s*[:：]?\s*(\d{2,3})\s*[年/]\s*(\d{1,2})', "關鍵字：保險費年月"),
+        
+        # 優先級 3：計費期間 "計費期間：112年10月"
+        (r'計費期間\s*[:：]?\s*(\d{2,3})\s*[年/]\s*(\d{1,2})', "關鍵字：計費期間")
+    ]
+
+    for pattern, source_name in period_patterns:
+        match = re.search(pattern, text)
+        if match:
+            try:
+                roc_y = int(match.group(1))
+                m = int(match.group(2))
+                
+                # 簡單檢核：月份必須在 1-12 之間，年份不太可能小於 97 (國民年金開辦年)
+                if 1 <= m <= 12 and roc_y > 90:
+                    deadline = calculate_deadline_from_period(roc_y, m)
+                    extracted_period = f"{roc_y}年{m}月"
+                    match_source = source_name
+                    break # 找到了就跳出，不再嘗試後面的規則
+            except:
+                continue
+
+    # 回傳值多了一個 match_source 方便除錯
+    return text, amount, deadline, extracted_period, match_source
 
 def calculate_interest(principal, deadline_date, payment_date):
     """
@@ -122,13 +183,18 @@ pdf_text_debug = ""
 
 if uploaded_file is not None:
     with st.spinner("正在分析 PDF..."):
-        # 呼叫解析函式
-        pdf_text_debug, extracted_amount, extracted_deadline = parse_pdf(uploaded_file)
+        # 接收 5 個回傳值
+        pdf_text_debug, extracted_amount, extracted_deadline, extracted_period, match_source = parse_pdf(uploaded_file)
         
         # --- 除錯區塊 START ---
         with st.expander("🛠️ 開發者除錯模式 (點擊展開)", expanded=True):
-            st.info(f"偵測到的金額: {extracted_amount}")
-            st.info(f"偵測到的日期: {extracted_deadline}")
+            if extracted_period:
+                st.success(f"📅 鎖定保費月份: {extracted_period}")
+                st.caption(f"🔎 偵測依據規則: {match_source}") # 顯示是哪條 Regex 建功
+            else:
+                st.warning("⚠️ 未偵測到保費月份，請確認 PDF 文字內容")
+            st.info(f"💰 偵測到的金額: {extracted_amount}")
+            st.info(f"⏳ 推算出的繳費期限: {extracted_deadline}")
             
             if not pdf_text_debug.strip():
                 st.error("⚠️ 警告：無法從 PDF 中提取任何文字！")
