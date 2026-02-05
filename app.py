@@ -74,7 +74,7 @@ def parse_pdf(file):
     match_source = "無" # 用於除錯，告訴你是哪個規則抓到的
 
     # --- 1. 抓取金額 (維持不變) ---
-    amt_match = re.search(r'(應繳金額|合計|小計|總計)\s*[:：]?\s*[NTD$]*\s*([0-9,]+)', text)
+    amt_match = re.search(r'(應繳總金額|合計|小計|總計)\s*[:：]?\s*[NTD$]*\s*([0-9,]+)', text)
     if amt_match:
         try:
             amount_str = amt_match.group(2).replace(',', '')
