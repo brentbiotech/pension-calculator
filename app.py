@@ -122,7 +122,21 @@ pdf_text_debug = ""
 
 if uploaded_file is not None:
     with st.spinner("正在分析 PDF..."):
+        # 呼叫解析函式
         pdf_text_debug, extracted_amount, extracted_deadline = parse_pdf(uploaded_file)
+        
+        # --- 除錯區塊 START ---
+        with st.expander("🛠️ 開發者除錯模式 (點擊展開)", expanded=True):
+            st.info(f"偵測到的金額: {extracted_amount}")
+            st.info(f"偵測到的日期: {extracted_deadline}")
+            
+            if not pdf_text_debug.strip():
+                st.error("⚠️ 警告：無法從 PDF 中提取任何文字！")
+                st.markdown("這張 PDF 可能是**「掃描圖片」**而非文字檔，`pdfplumber` 無法讀取圖片內的文字。請改用電子帳單 PDF，或是需要加入 OCR (文字辨識) 功能。")
+            else:
+                st.text_area("PDF 原始讀取內容 (請檢查關鍵字是否存在)", pdf_text_debug, height=300)
+        # --- 除錯區塊 END ---
+
         if extracted_amount > 0:
             default_amount = extracted_amount
             st.success("✅ 已成功讀取金額！")
