@@ -234,7 +234,7 @@ if st.button("計算利息", type="primary"):
             st.success("✨ 依規定，利息總額在 30 元(含)以下免徵，您**不需要**繳納利息。")
         else:
             st.subheader(f"應繳利息：{interest} 元")
-            st.warning("⚠️ 利息超過 30 元，需一併繳納。")
+            st.warning("⚠️ 利息超過 30 元，將於繳費後另行通知繳納。")
             
         # 顯示詳細計算過程
         with st.expander("查看詳細計算過程"):
