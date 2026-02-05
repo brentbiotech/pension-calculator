@@ -34,7 +34,7 @@ def parse_pdf(file):
 
     # 1. 嘗試抓取金額 (常見關鍵字：合計、應繳總金額)
     # 尋找 "合計" 或 "金額" 後面的數字，允許包含千分位逗號
-    amt_match = re.search(r'(應繳金額|合計|小計)\s*[:：]?\s*[\$NTD]*\s*([0-9,]+)', text)
+    amt_match = re.search(r'(應繳總金額|合計|小計)\s*[:：]?\s*[\$NTD]*\s*([0-9,]+)', text)
     if amt_match:
         try:
             amount_str = amt_match.group(2).replace(',', '')
